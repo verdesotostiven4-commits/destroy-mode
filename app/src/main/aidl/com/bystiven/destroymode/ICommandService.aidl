@@ -1,5 +1,6 @@
 package com.bystiven.destroymode;
 
 interface ICommandService {
-    String exec(String command);
+    void destroy() = 16777114;
+    String exec(String command) = 1;
 }
