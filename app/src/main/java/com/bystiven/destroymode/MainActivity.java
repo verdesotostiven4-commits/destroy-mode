@@ -1,14 +1,11 @@
 package com.bystiven.destroymode;
 
 import android.app.Activity;
-import android.content.ComponentName;
 import android.content.Intent;
-import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
-import android.os.IBinder;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -18,6 +15,10 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -29,7 +30,6 @@ public class MainActivity extends Activity {
     private static final int SHIZUKU_REQUEST_CODE = 41;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private ICommandService shell;
     private Runnable pendingAction;
 
     private TextView statusText;
@@ -40,8 +40,12 @@ public class MainActivity extends Activity {
             (requestCode, grantResult) -> {
                 if (requestCode != SHIZUKU_REQUEST_CODE) return;
                 if (grantResult == PackageManager.PERMISSION_GRANTED) {
-                    bindShellThenRun();
+                    Runnable action = pendingAction;
+                    pendingAction = null;
+                    showStatus("Shizuku listo · toca ACTIVAR Y JUGAR", true);
+                    if (action != null) action.run();
                 } else {
+                    pendingAction = null;
                     showStatus("Shizuku sin permiso", false);
                 }
             };
@@ -51,23 +55,6 @@ public class MainActivity extends Activity {
 
     private final Shizuku.OnBinderDeadListener binderDeadListener = () ->
             runOnUiThread(() -> showStatus("Shizuku detenido", false));
-
-    private final ServiceConnection connection = new ServiceConnection() {
-        @Override
-        public void onServiceConnected(ComponentName name, IBinder service) {
-            shell = ICommandService.Stub.asInterface(service);
-            showStatus("Listo para destruir gráficos", true);
-            Runnable action = pendingAction;
-            pendingAction = null;
-            if (action != null) action.run();
-        }
-
-        @Override
-        public void onServiceDisconnected(ComponentName name) {
-            shell = null;
-            showStatus("Servicio desconectado", false);
-        }
-    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -99,27 +86,25 @@ public class MainActivity extends Activity {
         root.setPadding(dp(24), dp(36), dp(24), dp(36));
         scroll.addView(root);
 
-        TextView eyebrow = text("XIAOMI 14T PRO · ARENA BREAKOUT LITE", 12, Color.rgb(160, 165, 180));
-        root.addView(eyebrow);
+        root.addView(text("XIAOMI 14T PRO · ARENA BREAKOUT LITE", 12, Color.rgb(160, 165, 180)));
 
         TextView title = text("DESTROY\nMODE", 42, Color.WHITE);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setPadding(0, dp(6), 0, dp(6));
         root.addView(title);
 
-        TextView subtitle = text("FPS primero. Calidad después.", 18, Color.rgb(205, 208, 218));
-        root.addView(subtitle);
+        root.addView(text("FPS primero. Calidad después.", 18, Color.rgb(205, 208, 218)));
 
         statusText = text("Comprobando…", 15, Color.rgb(255, 183, 77));
         statusText.setPadding(0, dp(24), 0, dp(20));
         root.addView(statusText);
 
         playButton = button("🔥 ACTIVAR Y JUGAR");
-        playButton.setOnClickListener(v -> ensureShell(this::applyAndLaunch));
+        playButton.setOnClickListener(v -> ensureShizuku(this::applyAndLaunch));
         root.addView(playButton, fullWidth(dp(58)));
 
         restoreButton = button("↩ RESTAURAR ARENA");
-        restoreButton.setOnClickListener(v -> ensureShell(this::restoreArena));
+        restoreButton.setOnClickListener(v -> ensureShizuku(this::restoreArena));
         root.addView(restoreButton, fullWidth(dp(54)));
 
         Button shizukuButton = button("ABRIR SHIZUKU");
@@ -193,69 +178,43 @@ public class MainActivity extends Activity {
             return;
         }
 
-        if (shell == null) {
-            showStatus("Shizuku listo · toca ACTIVAR Y JUGAR", true);
-        } else {
-            showStatus("Listo para destruir gráficos", true);
-        }
+        showStatus("Shizuku listo · toca ACTIVAR Y JUGAR", true);
     }
 
-    private void ensureShell(Runnable action) {
-        pendingAction = action;
-
+    private void ensureShizuku(Runnable action) {
         if (!Shizuku.pingBinder()) {
-            pendingAction = null;
             showStatus("Shizuku no está ejecutándose", false);
             Toast.makeText(this, "Abre Shizuku e inícialo primero", Toast.LENGTH_LONG).show();
             return;
         }
 
         if (Shizuku.isPreV11()) {
-            pendingAction = null;
             showStatus("Esta versión de Shizuku es demasiado antigua", false);
             return;
         }
 
-        if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-            if (Shizuku.shouldShowRequestPermissionRationale()) {
-                pendingAction = null;
-                showStatus("Autoriza la app desde Shizuku", false);
+        try {
+            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                pendingAction = action;
+                if (Shizuku.shouldShowRequestPermissionRationale()) {
+                    pendingAction = null;
+                    showStatus("Autoriza Destroy Mode desde Shizuku", false);
+                    return;
+                }
+                Shizuku.requestPermission(SHIZUKU_REQUEST_CODE);
                 return;
             }
-            Shizuku.requestPermission(SHIZUKU_REQUEST_CODE);
-            return;
-        }
-
-        if (shell != null) {
-            Runnable run = pendingAction;
-            pendingAction = null;
-            run.run();
-            return;
-        }
-
-        bindShellThenRun();
-    }
-
-    private void bindShellThenRun() {
-        try {
-            Shizuku.UserServiceArgs args = new Shizuku.UserServiceArgs(
-                    new ComponentName(getPackageName(), ShellService.class.getName()))
-                    .processNameSuffix("destroy")
-                    .daemon(false)
-                    .tag("destroy-mode-shell")
-                    .version(1);
-
-            showStatus("Conectando con Shizuku…", true);
-            Shizuku.bindUserService(args, connection);
         } catch (Throwable t) {
-            pendingAction = null;
-            showStatus("Error conectando Shizuku: " + t.getMessage(), false);
+            showStatus("Error comprobando Shizuku: " + t.getMessage(), false);
+            return;
         }
+
+        action.run();
     }
 
     private void applyAndLaunch() {
         setBusy(true);
-        showStatus("Aplicando 120 FPS + Performance + 0.8…", true);
+        showStatus("Aplicando perfil Destroy Mode…", true);
 
         executor.execute(() -> {
             StringBuilder log = new StringBuilder();
@@ -264,7 +223,7 @@ public class MainActivity extends Activity {
             log.append('\n').append(exec("am force-stop " + ARENA_PACKAGE));
 
             try {
-                Thread.sleep(700);
+                Thread.sleep(500);
             } catch (InterruptedException ignored) {
             }
 
@@ -274,8 +233,8 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 setBusy(false);
                 String fullLog = log.toString();
-                if (fullLog.contains("ERROR") || fullLog.contains("Invalid") || fullLog.contains("No activities found")) {
-                    showStatus("Perfil aplicado, pero Arena no abrió", false);
+                if (fullLog.contains("ERROR:") || fullLog.contains("Invalid") || fullLog.contains("No activities found")) {
+                    showStatus("Perfil aplicado con error al abrir Arena", false);
                     Toast.makeText(this, fullLog, Toast.LENGTH_LONG).show();
                     fallbackLaunch();
                     return;
@@ -302,7 +261,7 @@ public class MainActivity extends Activity {
 
     private void restoreArena() {
         setBusy(true);
-        showStatus("Restaurando configuración del sistema…", true);
+        showStatus("Restaurando Arena…", true);
 
         executor.execute(() -> {
             String result = exec("cmd game reset " + ARENA_PACKAGE) + "\n" +
@@ -311,7 +270,7 @@ public class MainActivity extends Activity {
 
             runOnUiThread(() -> {
                 setBusy(false);
-                if (result.contains("ERROR") || result.contains("Invalid")) {
+                if (result.contains("ERROR:") || result.contains("Invalid")) {
                     showStatus("La restauración devolvió un error", false);
                     Toast.makeText(this, result, Toast.LENGTH_LONG).show();
                 } else {
@@ -324,9 +283,30 @@ public class MainActivity extends Activity {
 
     private String exec(String command) {
         try {
-            return shell.exec(command);
+            Method method = Shizuku.class.getDeclaredMethod(
+                    "newProcess", String[].class, String[].class, String.class);
+            method.setAccessible(true);
+
+            Process process = (Process) method.invoke(null,
+                    new Object[]{new String[]{"sh", "-c", command}, null, null});
+
+            StringBuilder out = new StringBuilder();
+            try (BufferedReader stdout = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+                 BufferedReader stderr = new BufferedReader(
+                         new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
+
+                String line;
+                while ((line = stdout.readLine()) != null) out.append(line).append('\n');
+                while ((line = stderr.readLine()) != null) out.append(line).append('\n');
+            }
+
+            int code = process.waitFor();
+            out.append("exit=").append(code);
+            return out.toString();
         } catch (Throwable t) {
-            return "ERROR: " + t.getMessage();
+            Throwable cause = t.getCause() != null ? t.getCause() : t;
+            return "ERROR: " + cause.getClass().getSimpleName() + ": " + cause.getMessage();
         }
     }
 
