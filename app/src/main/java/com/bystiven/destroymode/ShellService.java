@@ -15,6 +15,11 @@ public class ShellService extends ICommandService.Stub {
     }
 
     @Override
+    public void destroy() {
+        System.exit(0);
+    }
+
+    @Override
     public String exec(String command) {
         StringBuilder output = new StringBuilder();
         try {
