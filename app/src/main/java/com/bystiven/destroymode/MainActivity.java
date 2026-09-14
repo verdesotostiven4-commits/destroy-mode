@@ -114,10 +114,10 @@ public class MainActivity extends Activity {
         TextView profile = text(
                 "Perfil actual de Destroy Mode\n\n" +
                         "• 120 FPS objetivo\n" +
-                        "• Downscale Android: 0.8\n" +
+                        "• Resolución Android: nativa (sin downscale)\n" +
                         "• Game mode: Performance\n" +
-                        "• Arena Lite: 480p / mínimo\n" +
-                        "• Game Turbo: 1X / Alta velocidad / LOD +2\n\n" +
+                        "• Pantalla completa preservada\n\n" +
+                        "Destroy Mode ya NO reduce la escala de Android. " +
                         "La app NO modifica el APK, assets ni archivos internos de Arena.",
                 14,
                 Color.rgb(180, 184, 198));
@@ -218,31 +218,63 @@ public class MainActivity extends Activity {
 
         executor.execute(() -> {
             StringBuilder log = new StringBuilder();
-            log.append(exec("cmd game set --mode 2 --downscale 0.8 --fps 120 " + ARENA_PACKAGE));
-            log.append('\n').append(exec("cmd game mode 2 " + ARENA_PACKAGE));
-            log.append('\n').append(exec("am force-stop " + ARENA_PACKAGE));
+
+            // Clear any old Game Manager override first. This is important for users who
+            // previously ran the 0.8 downscale profile: otherwise Android can keep the old
+            // render scale even when the new command omits --downscale.
+            String resetResult = exec("cmd game reset " + ARENA_PACKAGE);
+            log.append("reset: ").append(resetResult);
+
+            // Keep native resolution. We intentionally do NOT pass --downscale here.
+            String profileResult = exec("cmd game set --mode 2 --fps 120 " + ARENA_PACKAGE);
+            log.append('\n').append("profile: ").append(profileResult);
+
+            String modeResult = exec("cmd game mode 2 " + ARENA_PACKAGE);
+            log.append('\n').append("mode: ").append(modeResult);
+
+            String stopResult = exec("am force-stop " + ARENA_PACKAGE);
+            log.append('\n').append("stop: ").append(stopResult);
+
+            if (hasCommandError(resetResult) || hasCommandError(profileResult) || hasCommandError(modeResult)) {
+                String fullLog = log.toString();
+                runOnUiThread(() -> {
+                    setBusy(false);
+                    showStatus("No pude aplicar el perfil completo", false);
+                    Toast.makeText(this, fullLog, Toast.LENGTH_LONG).show();
+                });
+                return;
+            }
 
             try {
                 Thread.sleep(500);
             } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
             }
 
             String launchResult = exec("monkey -p " + ARENA_PACKAGE + " -c android.intent.category.LAUNCHER 1");
-            log.append('\n').append(launchResult);
+            log.append('\n').append("launch: ").append(launchResult);
 
             runOnUiThread(() -> {
                 setBusy(false);
-                String fullLog = log.toString();
-                if (fullLog.contains("ERROR:") || fullLog.contains("Invalid") || fullLog.contains("No activities found")) {
-                    showStatus("Perfil aplicado con error al abrir Arena", false);
-                    Toast.makeText(this, fullLog, Toast.LENGTH_LONG).show();
+                if (hasCommandError(launchResult) || launchResult.contains("No activities found")) {
+                    showStatus("Perfil aplicado · abriendo Arena por Android", true);
                     fallbackLaunch();
                     return;
                 }
 
-                showStatus("Destroy Mode activo · Arena iniciada", true);
+                showStatus("Destroy Mode activo · resolución nativa · Arena iniciada", true);
             });
         });
+    }
+
+    private boolean hasCommandError(String result) {
+        if (result == null) return true;
+        return result.contains("ERROR:") ||
+                result.contains("Invalid") ||
+                result.contains("Unknown option") ||
+                result.contains("Unknown command") ||
+                result.contains("SecurityException") ||
+                result.matches("(?s).*exit=[1-9][0-9]*.*");
     }
 
     private void fallbackLaunch() {
@@ -264,13 +296,13 @@ public class MainActivity extends Activity {
         showStatus("Restaurando Arena…", true);
 
         executor.execute(() -> {
-            String result = exec("cmd game reset " + ARENA_PACKAGE) + "\n" +
-                    exec("cmd game mode 1 " + ARENA_PACKAGE) + "\n" +
-                    exec("am force-stop " + ARENA_PACKAGE);
+            String resetResult = exec("cmd game reset " + ARENA_PACKAGE);
+            String stopResult = exec("am force-stop " + ARENA_PACKAGE);
+            String result = resetResult + "\n" + stopResult;
 
             runOnUiThread(() -> {
                 setBusy(false);
-                if (result.contains("ERROR:") || result.contains("Invalid")) {
+                if (hasCommandError(resetResult)) {
                     showStatus("La restauración devolvió un error", false);
                     Toast.makeText(this, result, Toast.LENGTH_LONG).show();
                 } else {
