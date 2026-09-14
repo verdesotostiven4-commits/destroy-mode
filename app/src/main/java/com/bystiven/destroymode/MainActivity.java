@@ -263,24 +263,41 @@ public class MainActivity extends Activity {
             log.append('\n').append(exec("cmd game mode 2 " + ARENA_PACKAGE));
             log.append('\n').append(exec("am force-stop " + ARENA_PACKAGE));
 
+            try {
+                Thread.sleep(700);
+            } catch (InterruptedException ignored) {
+            }
+
+            String launchResult = exec("monkey -p " + ARENA_PACKAGE + " -c android.intent.category.LAUNCHER 1");
+            log.append('\n').append(launchResult);
+
             runOnUiThread(() -> {
                 setBusy(false);
-                if (log.toString().contains("ERROR") || log.toString().contains("Invalid")) {
-                    showStatus("No se pudo aplicar el perfil", false);
-                    Toast.makeText(this, log.toString(), Toast.LENGTH_LONG).show();
+                String fullLog = log.toString();
+                if (fullLog.contains("ERROR") || fullLog.contains("Invalid") || fullLog.contains("No activities found")) {
+                    showStatus("Perfil aplicado, pero Arena no abrió", false);
+                    Toast.makeText(this, fullLog, Toast.LENGTH_LONG).show();
+                    fallbackLaunch();
                     return;
                 }
 
-                showStatus("Destroy Mode activo · abriendo Arena…", true);
-                Intent launch = getPackageManager().getLaunchIntentForPackage(ARENA_PACKAGE);
-                if (launch != null) {
-                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(launch);
-                } else {
-                    showStatus("No encontré Arena Breakout Lite", false);
-                }
+                showStatus("Destroy Mode activo · Arena iniciada", true);
             });
         });
+    }
+
+    private void fallbackLaunch() {
+        try {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(ARENA_PACKAGE);
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                startActivity(launch);
+            } else {
+                showStatus("No encontré el launcher de Arena Lite", false);
+            }
+        } catch (Throwable t) {
+            showStatus("No pude abrir Arena: " + t.getMessage(), false);
+        }
     }
 
     private void restoreArena() {
