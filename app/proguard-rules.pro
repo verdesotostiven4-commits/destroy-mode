@@ -1,0 +1,2 @@
+-keep class com.bystiven.destroymode.ShellService { *; }
+-keep interface com.bystiven.destroymode.ICommandService { *; }
